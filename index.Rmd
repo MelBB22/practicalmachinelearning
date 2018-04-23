@@ -1,0 +1,132 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Melanie Butler"
+date: "April 23, 2018"
+output: html_document
+---
+
+## Introduction
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+Citation:
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz5Cr37qrCu
+
+This report is the write up of the end-of-class project in the Practical Machine Learning Coursera course. Quoting from the course website, the purpose of this assignment is as follows.
+"One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants."
+
+This report attempt to predict how well someone does the exercises based on the data from the accelerometers on the arm, forearm belot and dumbbell of participants. Quoting from the above website:
+"Six young healthy participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E)."
+This project looks at the accelerometer data and predicts whether the particpant was performing the activity according to Class A, B, C, D, or E.
+
+## Load needed libraries
+```{r}
+library(caret)
+library(ggplot2)
+library(Hmisc)
+library(rattle)
+library(RANN)
+library(GGally)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+```
+## Read in the data from the web
+```{r}
+trainURL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(trainURL, destfile="~/barbelltrain.csv")
+download.file(testURL, destfile="~/barbelltest.csv")
+barbelldata<-read.csv("~/barbelltrain.csv", header=T, na.strings=c("","NA"))
+testcases<-read.csv("~/barbelltest.csv", header=T, na.strings=c("","NA"))
+```
+
+##Preprocess the data
+In this code chunk we preprocess the data. Because of many missing data values (over 1,000,000 NA values in the training data), we need to standardize the data by imputation. In the training data, we use knn imputation to deal with NA values. We also subset the data to remove any columns from the test data that only have NA values. We also subset the training data to remove rows with subject names and time stamps. For the test data, we remove the column with index number and remove any columns that do not contain any data points. After these preprocessing steps, the data has been refined to have 59 predictors, which is an improvement that will lead to less overfitting when we build a model.
+
+```{r}
+preObj<-preProcess(barbelldata[,-160], method="knnImpute")
+barbelldata[,-160]<-predict(preObj, barbelldata[,-160])
+barbelldata<-barbelldata[, !apply(is.na(testcases), 2, all)]
+barbelldata<-barbelldata[,8:60]
+testcases<-testcases[,-160]
+testcases<-testcases[, !apply(is.na(testcases), 2, all)]
+```
+
+## Cross validation
+In this code chunk the training data is partitioned into a training set and a testing set. This provides cross validation for the models built.
+```{r}
+set.seed(1245)
+inTrain<-createDataPartition(y=barbelldata$classe, p=0.7, list=FALSE)
+training<-barbelldata[inTrain,]
+testing<-barbelldata[-inTrain,]
+```
+
+## Data Exploration
+In this code chunk, the data is explored by making a random forest model and then checking the importance of each variable in the model. A plot is made to illustrate the importance.
+```{r}
+set.seed(1234)
+model <-randomForest(classe ~., data = training, importance = TRUE)
+y1=model$importance[,1]
+y2=model$importance[,2]
+y3=model$importance[,3]
+y4=model$importance[,4]
+par(mfrow=c(1,4))
+plot(y1, main = paste("Measure", 1), ylab="Importance")
+abline(h=0.05,col="red",lty=3, lwd = 2)
+plot(y2, main = paste("Measure", 2), ylab="Importance")
+abline(h=0.05,col="red",lty=3, lwd = 2)
+plot(y3, main = paste("Measure", 3), ylab="Importance")
+abline(h=0.05,col="red",lty=3, lwd = 2)
+plot(y4, main = paste("Measure", 4), ylab="Importance")
+abline(h=0.05,col="red",lty=3, lwd = 2)
+important<- c(names(y1[y1>.05]), names(y2[y2>.05]), names(y3[y3>.05]), names(y4[y4>.05]))
+sort(important, dec = TRUE)
+important<-unique(important)
+important
+```
+
+##Models
+In the next code chunk, three refined random forest models are made by limiting to the most important predictors as defined by the exploration above. Since we are tring to predict a factor variable (Class A, B, C, D, or E) a random forest model makes the most sense. In addition, Principal Component Analysis (PCA) is used in the analysis since it is likely that some of the variables are highly correlated. Finally, the first model is tested on the testing data set. A confusion matrix is generated to view the accuracy. Finally, to answer the quiz prediction questions, the refined model is used to predict the outcome for the 20 test cases.
+```{r}
+set.seed(5678)
+refinedmodel <-train(classe ~roll_belt+pitch_belt+yaw_belt+
+                                magnet_dumbbell_x+magnet_dumbbell_y+
+                                magnet_dumbbell_z+ roll_forearm+
+                                pitch_forearm+roll_dumbbell+
+                                accel_dumbbell_y+accel_forearm_x, data = 
+                                training, method="rf", preprocess="pca", 
+                                verbose=FALSE)
+refinedmodel2<-randomForest(classe ~roll_belt+pitch_belt+yaw_belt+magnet_arm_x+
+                                magnet_dumbbell_x+magnet_dumbbell_y+
+                                magnet_dumbbell_z+ roll_forearm+
+                                pitch_forearm 
+                                +magnet_belt_y+magnet_belt_z
+                                +roll_dumbbell+
+                                accel_dumbbell_y+accel_belt_z + 
+                                +roll_arm+ yaw_dumbbell +
+                                accel_dumbbell_x+ accel_dumbbell_z +
+                                magnet_arm_y + total_accel_dumbbell + 
+                                accel_forearm_x, data = 
+                                training, 
+                                verbose=FALSE)
+refindedmodel3<-rpart(classe ~roll_belt+pitch_belt+yaw_belt+magnet_arm_x+
+                                magnet_dumbbell_x+magnet_dumbbell_y+
+                                magnet_dumbbell_z+ roll_forearm+
+                                pitch_forearm 
+                                +magnet_belt_y+magnet_belt_z
+                                +roll_dumbbell+
+                                accel_dumbbell_y+accel_belt_z + 
+                                +roll_arm+ yaw_dumbbell +
+                                accel_dumbbell_x+ accel_dumbbell_z +
+                                magnet_arm_y + total_accel_dumbbell + 
+                                accel_forearm_x, data = 
+                                training, 
+                                method="class")
+pred<-predict(refinedmodel, newdata=testing)
+confusionMatrix(testing$classe, pred)
+predtestcases<-predict(refinedmodel, newdata = testcases)
+predtestcases
+```
+Based on the confusion matrix, the model is predicted to have a 98.56% out-of-sample error rate of .
